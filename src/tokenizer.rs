@@ -24,6 +24,7 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Tilda,
 
     Le,
     Greater,
@@ -100,6 +101,7 @@ impl<'a> Tokenizer<'a> {
             '*' => Token::Star,
             '[' => Token::LBracket,
             ']' => Token::RBracket,
+            '~' => Token::Tilda,
             '/' => {
                 self.next_char();
 
