@@ -259,7 +259,7 @@ impl<'a> Tokenizer<'a> {
         // Skip the first quote without checking it (checking is done in `tokenize`)
         self.next_char();
 
-        while !self.last_char_is('"') {
+        while !self.eof && !self.last_char_is('"') {
             if self.last == '\n' {
                 return Token::Error(format!(
                     "Unterminated string started at {}:{} — found a newline before the closing quote. \
