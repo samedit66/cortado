@@ -67,7 +67,7 @@ impl<'a> Tokenizer<'a> {
             last: ' ',
             eof: false,
             line: 1,
-            col: 0,
+            col: 1,
         }
     }
 
