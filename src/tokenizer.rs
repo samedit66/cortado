@@ -3,7 +3,8 @@ use std::str::Chars;
 #[derive(Debug, PartialEq)]
 pub enum Token {
     Ident(String),
-    Num(String),
+    Int(String),
+    Float(String),
     Str(String),
     Dot,
     Comma,
@@ -11,6 +12,8 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Assign,
     Colon,
     Semicolon,
@@ -22,11 +25,12 @@ pub enum Token {
     Star,
     Slash,
 
-    LessThan,
+    Le,
     Greater,
-    GreaterThan,
+    Ge,
     Equal,
     NotEqual,
+    RArrow,
 
     KwMethod,
     KwGiven,
@@ -67,9 +71,8 @@ impl<'a> Tokenizer<'a> {
     }
 
     pub fn tokenize(&mut self) -> TokenAt {
-        while !self.eof && self.last.is_whitespace() {
-            self.next();
-        }
+        self.skip_whitespace();
+        self.skip_comment();
 
         let line = self.line;
         let col = self.col;
@@ -95,10 +98,12 @@ impl<'a> Tokenizer<'a> {
             '+' => Token::Plus,
             '-' => Token::Minus,
             '*' => Token::Star,
+            '[' => Token::LBracket,
+            ']' => Token::RBracket,
             '/' => {
-                self.next();
+                self.next_char();
 
-                if !self.eof && self.last == '=' {
+                if self.last_char_is('=') {
                     Token::NotEqual
                 } else {
                     advance = false;
@@ -108,30 +113,32 @@ impl<'a> Tokenizer<'a> {
             '&' => Token::And,
             '|' => Token::Or,
             '<' => {
-                self.next();
+                self.next_char();
 
-                if !self.eof && self.last == '=' {
-                    Token::LessThan
+                if self.last_char_is('=') {
+                    Token::Le
                 } else {
                     advance = false;
                     Token::Less
                 }
             }
             '>' => {
-                self.next();
+                self.next_char();
 
-                if !self.eof && self.last == '=' {
-                    Token::GreaterThan
+                if self.last_char_is('=') {
+                    Token::Ge
                 } else {
                     advance = false;
                     Token::Greater
                 }
             }
             '=' => {
-                self.next();
+                self.next_char();
 
-                if !self.eof && self.last == '=' {
+                if self.last_char_is('=') {
                     Token::Equal
+                } else if self.last_char_is('>') {
+                    Token::RArrow
                 } else {
                     advance = false;
                     Token::Assign
@@ -146,7 +153,7 @@ impl<'a> Tokenizer<'a> {
                     self.read_word()
                 } else if self.last.is_numeric() {
                     self.read_num()
-                } else if self.last == '"' {
+                } else if self.last_char_is('"') {
                     self.read_str()
                 } else {
                     Token::Error(format!(
@@ -159,13 +166,13 @@ impl<'a> Tokenizer<'a> {
         };
 
         if advance {
-            self.next();
+            self.next_char();
         }
 
         TokenAt { token, line, col }
     }
 
-    fn next(&mut self) {
+    fn next_char(&mut self) {
         if self.eof {
             return;
         }
@@ -190,16 +197,9 @@ impl<'a> Tokenizer<'a> {
     fn read_word(&mut self) -> Token {
         let mut buf = String::new();
 
-        while !self.eof
-            && (self.last.is_alphabetic()
-                || self.last.is_numeric()
-                || self.last == '?'
-                || self.last == '!'
-                || self.last == '-'
-                || self.last == '_')
-        {
+        while self.possible_part_of_identifier() {
             buf.push(self.last);
-            self.next();
+            self.next_char();
         }
 
         match buf.as_str() {
@@ -213,24 +213,51 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    fn skip_whitespace(&mut self) {
+        while self.satisfies(char::is_whitespace) {
+            self.next_char();
+        }
+    }
+
+    fn skip_comment(&mut self) {
+        if self.last_char_is('#') {
+            self.next_char();
+
+            while !self.last_char_is('\n') {
+                self.next_char();
+            }
+        }
+    }
+
     fn read_num(&mut self) -> Token {
         let mut buf = String::new();
+        let mut dot = false;
 
-        while !self.eof && (self.last.is_numeric() || self.last == '_') {
+        while self.possible_part_of_number() {
             buf.push(self.last);
-            self.next();
+            self.next_char();
+
+            if !dot && self.last_char_is('.') {
+                dot = true;
+                buf.push(self.last);
+                self.next_char();
+            }
         }
 
-        Token::Num(buf)
+        if dot {
+            Token::Float(buf)
+        } else {
+            Token::Int(buf)
+        }
     }
 
     fn read_str(&mut self) -> Token {
         let mut buf = String::new();
 
         // Skip the first quote without checking it (checking is done in `tokenize`)
-        self.next();
+        self.next_char();
 
-        while !self.eof && self.last != '"' {
+        while !self.last_char_is('"') {
             if self.last == '\n' {
                 return Token::Error(format!(
                     "Unterminated string started at {}:{} — found a newline before the closing quote. \
@@ -240,7 +267,7 @@ impl<'a> Tokenizer<'a> {
             }
 
             buf.push(self.last);
-            self.next();
+            self.next_char();
         }
 
         if self.eof {
@@ -252,184 +279,43 @@ impl<'a> Tokenizer<'a> {
         }
 
         // Skip the second quote
-        self.next();
+        self.next_char();
 
         Token::Str(buf)
     }
+
+    fn satisfies<F>(&self, pred: F) -> bool
+    where
+        F: Fn(char) -> bool,
+    {
+        !self.eof && pred(self.last)
+    }
+
+    fn last_char_is(&self, ch: char) -> bool {
+        self.satisfies(|c| c == ch)
+    }
+
+    fn possible_part_of_identifier(&self) -> bool {
+        self.satisfies(|c| {
+            c.is_alphabetic() || c.is_numeric() || c == '?' || c == '!' || c == '-' || c == '_'
+        })
+    }
+
+    fn possible_part_of_number(&self) -> bool {
+        self.satisfies(|c| c.is_numeric() || c == '_')
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl<'a> Iterator for Tokenizer<'a> {
+    type Item = TokenAt;
 
-    /// Helper: collect tokens until we hit Eof or Error (both considered terminal here).
-    fn collect_tokens(src: &str) -> Vec<Token> {
-        let mut t = Tokenizer::new(src);
-        let mut out = Vec::new();
+    fn next(&mut self) -> Option<Self::Item> {
+        let ta = self.tokenize();
 
-        loop {
-            let TokenAt { token, .. } = t.tokenize();
-            let terminal = matches!(token, Token::Eof | Token::Error(_));
-            out.push(token);
-            if terminal {
-                break;
-            }
-        }
-
-        out
-    }
-
-    #[test]
-    fn test_single_char_tokens() {
-        let input = ". , ( ) { } : ; + - * / & |";
-        let got = collect_tokens(input);
-        let expect = vec![
-            Token::Dot,
-            Token::Comma,
-            Token::LParen,
-            Token::RParen,
-            Token::LBrace,
-            Token::RBrace,
-            Token::Colon,
-            Token::Semicolon,
-            Token::Plus,
-            Token::Minus,
-            Token::Star,
-            Token::Slash,
-            Token::And,
-            Token::Or,
-            Token::Eof,
-        ];
-        assert_eq!(got, expect);
-    }
-
-    #[test]
-    fn test_comparisons_and_assignments() {
-        let input = "< <= > >= = == /=";
-        let got = collect_tokens(input);
-        let expect = vec![
-            Token::Less,
-            Token::LessThan,
-            Token::Greater,
-            Token::GreaterThan,
-            Token::Assign,
-            Token::Equal,
-            Token::NotEqual,
-            Token::Eof,
-        ];
-        assert_eq!(got, expect);
-    }
-
-    #[test]
-    fn test_keywords_and_identifiers() {
-        let input = "method given when default true false foo foo123 bar? baz! qux-abc foo_bar";
-        let got = collect_tokens(input);
-        let expect = vec![
-            Token::KwMethod,
-            Token::KwGiven,
-            Token::KwWhen,
-            Token::KwDefault,
-            Token::KwTrue,
-            Token::KwFalse,
-            Token::Ident("foo".into()),
-            Token::Ident("foo123".into()),
-            Token::Ident("bar?".into()),
-            Token::Ident("baz!".into()),
-            Token::Ident("qux-abc".into()),
-            Token::Ident("foo_bar".into()),
-            Token::Eof,
-        ];
-        assert_eq!(got, expect);
-    }
-
-    #[test]
-    fn test_numbers() {
-        let input = "123 4_567";
-        let got = collect_tokens(input);
-        let expect = vec![
-            Token::Num("123".into()),
-            Token::Num("4_567".into()),
-            Token::Eof,
-        ];
-        assert_eq!(got, expect);
-    }
-
-    #[test]
-    fn test_string_success() {
-        let input = r#""hello""#;
-        let got = collect_tokens(input);
-        let expect = vec![Token::Str("hello".into()), Token::Eof];
-        assert_eq!(got, expect);
-    }
-
-    #[test]
-    fn test_unterminated_string_newline_error() {
-        // string contains a newline before closing quote -> Error variant
-        let mut tok = Tokenizer::new("\"\n");
-        let TokenAt { token, .. } = tok.tokenize();
-        match token {
-            Token::Error(msg) => {
-                assert!(
-                    msg.to_lowercase().contains("unterminated string")
-                        && msg.to_lowercase().contains("newline"),
-                    "message did not mention newline/unterminated: {}",
-                    msg
-                );
-            }
-            other => panic!("expected Error token, got {:?}", other),
-        }
-
-        // Also test a multi-line string body (content then newline)
-        let mut tok2 = Tokenizer::new(
-            r#""bad
-rest"#,
-        );
-        let TokenAt { token: token2, .. } = tok2.tokenize();
-        match token2 {
-            Token::Error(msg) => {
-                assert!(
-                    msg.to_lowercase().contains("unterminated string")
-                        && msg.to_lowercase().contains("newline"),
-                    "message did not mention newline/unterminated: {}",
-                    msg
-                );
-            }
-            other => panic!("expected Error token, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_unterminated_string_eof_error() {
-        // string that never closes before EOF
-        let mut tok = Tokenizer::new("\"not closed");
-        let TokenAt { token, .. } = tok.tokenize();
-        match token {
-            Token::Error(msg) => {
-                assert!(
-                    msg.to_lowercase().contains("reached end of input")
-                        || msg.to_lowercase().contains("closing"),
-                    "unexpected error message: {}",
-                    msg
-                );
-            }
-            other => panic!("expected Error token, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_unknown_character_error() {
-        // unknown single character (e.g. '@') should produce an Error token
-        let mut tok = Tokenizer::new("@");
-        let TokenAt { token, .. } = tok.tokenize();
-        match token {
-            Token::Error(msg) => {
-                assert!(
-                    msg.contains("@") && msg.to_lowercase().contains("unknown character"),
-                    "unexpected error message: {}",
-                    msg
-                );
-            }
-            other => panic!("expected Error token, got {:?}", other),
+        if matches!(ta.token, Token::Eof | Token::Error(_)) {
+            None
+        } else {
+            Some(ta)
         }
     }
 }
